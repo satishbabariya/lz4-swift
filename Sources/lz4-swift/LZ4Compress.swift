@@ -262,8 +262,15 @@ public enum LZ4Compress {
                         let p1 = UnsafeRawPointer(srcPtr).advanced(by: ip)
                         let p2 = UnsafeRawPointer(srcPtr).advanced(by: matchIndex - baseIp)
                         
-                        let v1 = p1.load(as: SIMD16<UInt8>.self)
-                        let v2 = p2.load(as: SIMD16<UInt8>.self)
+                        var v1 = SIMD16<UInt8>.zero
+                        var v2 = SIMD16<UInt8>.zero
+                        
+                        withUnsafeMutableBytes(of: &v1) { vPtr in
+                            vPtr.copyMemory(from: UnsafeRawBufferPointer(start: p1, count: 16))
+                        }
+                        withUnsafeMutableBytes(of: &v2) { vPtr in
+                            vPtr.copyMemory(from: UnsafeRawBufferPointer(start: p2, count: 16))
+                        }
                         
                         if v1 == v2 {
                             ip += 16
@@ -371,8 +378,11 @@ public enum LZ4Compress {
     
     @inline(__always)
     private static func read32(_ src: UnsafePointer<UInt8>, _ index: Int) -> UInt32 {
-        // Unaligned load is safe on x86/ARM64 (usually)
-        return UnsafeRawPointer(src).load(fromByteOffset: index, as: UInt32.self)
+        var val: UInt32 = 0
+        withUnsafeMutableBytes(of: &val) { ptr in
+            ptr.copyMemory(from: UnsafeRawBufferPointer(start: src + index, count: 4))
+        }
+        return val
     }
     
     @inline(__always)

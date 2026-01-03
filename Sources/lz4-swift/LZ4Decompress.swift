@@ -15,22 +15,36 @@ public enum LZ4Decompress {
     ///   - dst: Destination buffer (must be large enough)
     /// - Returns: Number of bytes written to dst, or negative error code
     public static func decompress_safe(src: [UInt8], dst: inout [UInt8]) -> Int {
-        return decompress_generic(src: src, dst: &dst, targetOutputSize: dst.count)
+        let srcSize = src.count
+        let dstSize = dst.count
+        return src.withUnsafeBufferPointer { sPtr in
+            return dst.withUnsafeMutableBufferPointer { dPtr in
+                return decompress_generic(srcPtr: sPtr.baseAddress!, srcSize: srcSize, dstPtr: dPtr.baseAddress!, dstSize: dstSize, targetOutputSize: dstSize)
+            }
+        }
     }
     
     /// Decompress LZ4 compressed data partially.
-    /// - Parameters:
-    ///   - src: Source compressed data
-    ///   - dst: Destination buffer
-    ///   - targetOutputSize: Stop decompression after this many bytes
-    /// - Returns: Number of bytes written to dst, or negative error code
     public static func decompress_safe_partial(src: [UInt8], dst: inout [UInt8], targetOutputSize: Int) -> Int {
-        return decompress_generic(src: src, dst: &dst, targetOutputSize: targetOutputSize)
+        let srcSize = src.count
+        let dstSize = dst.count
+        return src.withUnsafeBufferPointer { sPtr in
+            return dst.withUnsafeMutableBufferPointer { dPtr in
+                return decompress_generic(srcPtr: sPtr.baseAddress!, srcSize: srcSize, dstPtr: dPtr.baseAddress!, dstSize: dstSize, targetOutputSize: targetOutputSize)
+            }
+        }
     }
 
     /// Decompress with external dictionary.
     public static func decompress_safe_usingDict(src: [UInt8], dst: inout [UInt8], dict: [UInt8]) -> Int {
-        return decompress_generic(src: src, dst: &dst, targetOutputSize: dst.count, dict: dict, dictSize: dict.count)
+        let srcSize = src.count
+        let dstSize = dst.count
+        let dictSize = dict.count
+        return src.withUnsafeBufferPointer { sPtr in
+            return dst.withUnsafeMutableBufferPointer { dPtr in
+                return decompress_generic(srcPtr: sPtr.baseAddress!, srcSize: srcSize, dstPtr: dPtr.baseAddress!, dstSize: dstSize, targetOutputSize: dstSize, dict: dict, dictSize: dictSize)
+            }
+        }
     }
 
     /// Decompress using streaming context (which holds dict).
@@ -38,18 +52,18 @@ public enum LZ4Decompress {
          return decompress_safe_usingDict(src: src, dst: &dst, dict: ctx.dict)
     }
 
-    private static func decompress_generic(src: [UInt8], dst: inout [UInt8], targetOutputSize: Int, dict: [UInt8]? = nil, dictSize: Int = 0) -> Int {
+    private static func decompress_generic(srcPtr: UnsafePointer<UInt8>, srcSize: Int, dstPtr: UnsafeMutablePointer<UInt8>, dstSize: Int, targetOutputSize: Int, dict: [UInt8]? = nil, dictSize: Int = 0) -> Int {
         var ip = 0
-        let iend = src.count
+        let iend = srcSize
         
         var op = 0
-        let oend = dst.count
+        let oend = dstSize
         let oexit = targetOutputSize
         
         // Main loop
         while ip < iend {
             // Get token
-            let token = Int(src[ip])
+            let token = Int(srcPtr[ip])
             ip += 1
             
             // Literal length
@@ -57,7 +71,7 @@ public enum LZ4Decompress {
             if literalLen == Int(LZ4Constants.RUN_MASK) {
                 var s = 255
                 while ip < iend && s == 255 {
-                    s = Int(src[ip])
+                    s = Int(srcPtr[ip])
                     ip += 1
                     literalLen += s
                 }
@@ -65,22 +79,25 @@ public enum LZ4Decompress {
             
             // Copy literals
             if op + literalLen > oend - LZ4Constants.WILDCOPYLENGTH {
-                if op + literalLen > oend { return -1 }
+                if op + literalLen > oend { return -1 } // Error: Output buffer too small
             }
             
-            if ip + literalLen > iend { return -2 }
+            if ip + literalLen > iend { return -2 } // Error: Input overrun for literals
             
-            for i in 0..<literalLen {
-                dst[op + i] = src[ip + i]
+            // Fast Copy
+            if literalLen > 0 {
+                // srcPtr + ip is safe
+                // dstPtr + op is safe checked above
+                UnsafeMutableRawPointer(dstPtr + op).copyMemory(from: srcPtr + ip, byteCount: literalLen)
+                op += literalLen
+                ip += literalLen
             }
-            op += literalLen
-            ip += literalLen
             
             if ip >= iend || op >= oexit { break }
             
             // Match offset
             if ip + 2 > iend { return -3 }
-            let offset = Int(src[ip]) | (Int(src[ip+1]) << 8)
+            let offset = Int(srcPtr[ip]) | (Int(srcPtr[ip+1]) << 8)
             ip += 2
             
             if offset == 0 { return -4 }
@@ -90,22 +107,43 @@ public enum LZ4Decompress {
             if matchLen == Int(LZ4Constants.ML_MASK) {
                 var s = 255
                 while ip < iend && s == 255 {
-                    s = Int(src[ip])
+                    s = Int(srcPtr[ip])
                     ip += 1
                     matchLen += s
                 }
             }
             matchLen += LZ4Constants.MINMATCH
             
-            if op + matchLen > oend { return -6 }
+            if op + matchLen > oend { return -6 } // Error: Output buffer too small for match
             
             // Copy match (Handle ExtDict)
             let matchPtr = op - offset
             
             if matchPtr >= 0 {
                 // Within current dst (Prefix)
-                for i in 0..<matchLen {
-                    dst[op + i] = dst[matchPtr + i]
+                
+                // Overlap handling:
+                // If offset < matchLen, regions overlap.
+                // copyMemory handles overlap safely? Documentation says "must not overlap".
+                // So we must use a loop if offset < matchLen.
+                // Or use `moveInitialize`? No, that's for typed pointers.
+                // Simplest/Fastest safe way for small overlaps is byte loop or incremental copy.
+                // If offset >= matchLen, we can use copyMemory.
+                
+                if offset >= matchLen {
+                    UnsafeMutableRawPointer(dstPtr + op).copyMemory(from: dstPtr + matchPtr, byteCount: matchLen)
+                } else {
+                    // Overlap copy
+                    if offset == 1 {
+                        // RLE optimization (Memset)
+                        let byte = dstPtr[matchPtr]
+                        UnsafeMutableRawPointer(dstPtr + op).initializeMemory(as: UInt8.self, repeating: byte, count: matchLen)
+                    } else {
+                        // General overlap (slow path, but rare for long matches usually)
+                        for i in 0..<matchLen {
+                            dstPtr[op + i] = dstPtr[matchPtr + i]
+                        }
+                    }
                 }
             } else {
                 // External Dictionary
@@ -118,14 +156,19 @@ public enum LZ4Decompress {
                 let copyFromPrefix = matchLen - copyFromDict
                 
                 if let d = dict {
+                     // Dictionary is [UInt8], accessing via subscript is slow?
+                     // Can we get a pointer to dict?
+                     // Ideally we passed UnsafePointer for dict too.
+                     // But dict is Array.
+                     // We can optimize this later. For now, loop.
                      for i in 0..<copyFromDict {
-                         dst[op + i] = d[dictIndex + i]
+                         dstPtr[op + i] = d[dictIndex + i]
                      }
                 }
                 
                 if copyFromPrefix > 0 {
                     for i in 0..<copyFromPrefix {
-                        dst[op + copyFromDict + i] = dst[i]
+                        dstPtr[op + copyFromDict + i] = dstPtr[i]
                     }
                 }
             }

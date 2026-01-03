@@ -84,7 +84,7 @@ public enum LZ4Frame {
         // Formula: 1 << (2*ID + 8)?
         // 4: 1 << 16 = 64KB. Correct.
         // 7: 1 << 22 = 4MB. Correct.
-        let maxBlockSize = (offset + blockSize > src.count) ? src.count - offset : blockSize // Init logic
+        let _ = (offset + blockSize > src.count) ? src.count - offset : blockSize // Init logic
         
         // TODO: Loop blocks
         let ctx = LZ4Stream()
@@ -170,6 +170,7 @@ public enum LZ4Frame {
         
         // Content Size (8 bytes) optional
         var cSize: UInt64 = 0
+        _ = cSize // Suppress warning
         if contentSize {
             if ip + 8 > iend { throw Error.corruptedHeader }
             // Read 64-bit size (ignore for now, valid frame just has it)
@@ -189,7 +190,7 @@ public enum LZ4Frame {
                 // Content Checksum
                 if contentChecksum {
                     if ip + 4 > iend { throw Error.contentChecksumMismatch }
-                    let expectedContentHC = read32(src, ip); ip += 4
+                    _ = read32(src, ip); ip += 4
                     // Verify logic disabled for now as per encoder work
                 }
                 break

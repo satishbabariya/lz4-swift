@@ -115,7 +115,7 @@ public struct LZ4HC {
         let mflimit = iend - 12
         let matchlimit = iend - 5
         
-        var op = 0
+        _ = 0 // op unused
         dst.reserveCapacity(LZ4Compress.compressBound(src.count))
         
         // First byte
