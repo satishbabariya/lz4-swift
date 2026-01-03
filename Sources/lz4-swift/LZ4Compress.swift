@@ -143,7 +143,7 @@ public enum LZ4Compress {
             if acceleration > 1 {
                  findMatchAttempts = findMatchAttempts / acceleration
             }
-            
+
             var forwardIp = ip
             
             outer: while true {
