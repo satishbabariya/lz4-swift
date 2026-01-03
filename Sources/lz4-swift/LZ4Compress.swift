@@ -106,9 +106,8 @@ public enum LZ4Compress {
                 dstPtr[op] = UInt8(litLen << 4); op += 1
             }
             
-            for i in 0..<litLen {
-                dstPtr[op + i] = srcPtr[i]
-            }
+            // Optimized Copy
+            UnsafeMutableRawPointer(dstPtr + op).copyMemory(from: srcPtr, byteCount: litLen)
             op += litLen
             return op
         }
@@ -125,11 +124,14 @@ public enum LZ4Compress {
         // Streaming Context
         let baseIp = ctx.processedBytes
         let dictSize = ctx.dictSize
-        let lowLimit = baseIp - dictSize // Absolute index of oldest byte available
+        
+        // Use separate pointers for dict and hash table for speed (hoist)
+        let hashTable = ctx.hashTable
+        let lowLimit = baseIp - dictSize
         
         // Setup Hash Table Init
         if baseIp == 0 && srcSize >= 4 {
-             ctx.hashTable[hash(read32(srcPtr, 0))] = 0
+             hashTable[hash(read32(srcPtr, 0))] = 0
         }
         
         ip += 1
@@ -153,8 +155,8 @@ public enum LZ4Compress {
                  
                  forwardH = hash(read32(srcPtr, forwardIp > mflimit ? mflimit : forwardIp)) 
                  
-                 let matchAbsIndex = ctx.hashTable[h]
-                 ctx.hashTable[h] = baseIp + current // Store Absolute
+                 let matchAbsIndex = Int(hashTable[h])
+                 hashTable[h] = Int32(baseIp + current)
                  
                  // Distance check (MAX_DISTANCE=64k)
                  let currentAbs = baseIp + current
@@ -166,7 +168,6 @@ public enum LZ4Compress {
                       if matchAbsIndex >= baseIp {
                           matchVal = read32(srcPtr, matchAbsIndex - baseIp)
                       } else {
-                          // In Dictionary
                           matchVal = read32_dict(ctx.dict, matchAbsIndex, baseIp, dictSize)
                       }
                       
@@ -234,9 +235,8 @@ public enum LZ4Compress {
                 dstPtr[token] = UInt8(litLen << 4)
             }
             
-            for i in 0..<litLen {
-                dstPtr[op+i] = srcPtr[anchor+i]
-            }
+            // Optimized Copy
+            UnsafeMutableRawPointer(dstPtr + op).copyMemory(from: srcPtr + anchor, byteCount: litLen)
             op += litLen
             
             // Encode Match
@@ -314,12 +314,12 @@ public enum LZ4Compress {
                 
                 // Fill Hash
                 let hPos = baseIp + ip - 2
-                ctx.hashTable[hash(read32(srcPtr, hPos - baseIp))] = hPos
+                hashTable[hash(read32(srcPtr, hPos - baseIp))] = Int32(hPos)
                 
                 // Test next
                 let h = hash(read32(srcPtr, ip))
-                let nextMatchAbs = ctx.hashTable[h]
-                ctx.hashTable[h] = baseIp + ip
+                let nextMatchAbs = Int(hashTable[h])
+                hashTable[h] = Int32(baseIp + ip)
                 
                 let curAbs = baseIp + ip
                 if (curAbs - nextMatchAbs < 65535) && (nextMatchAbs < curAbs) && (nextMatchAbs >= lowLimit) {
@@ -362,9 +362,8 @@ public enum LZ4Compress {
             dstPtr[token] = UInt8(litLen << 4)
         }
         
-        for i in 0..<litLen {
-            dstPtr[op+i] = srcPtr[anchor+i]
-        }
+        // Optimized Copy
+        UnsafeMutableRawPointer(dstPtr + op).copyMemory(from: srcPtr + anchor, byteCount: litLen)
         op += litLen
         
         return op

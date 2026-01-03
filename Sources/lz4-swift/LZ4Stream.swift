@@ -11,25 +11,28 @@ public class LZ4Stream {
     public static let DICT_SIZE = 65536 // 64KB
     
     // State
-    internal var hashTable: [Int]
+    internal var hashTable: UnsafeMutablePointer<Int32>
     internal var dict: [UInt8]
     internal var dictSize: Int
     internal var processedBytes: Int
     
     public init() {
-        self.hashTable = [Int](repeating: 0, count: LZ4Constants.HASH_SIZE_U32)
+        // Allocate hash table (Use Calloc to zero init)
+        self.hashTable = UnsafeMutablePointer<Int32>.allocate(capacity: LZ4Constants.HASH_SIZE_U32)
+        self.hashTable.initialize(repeating: 0, count: LZ4Constants.HASH_SIZE_U32)
+        
         self.dict = [UInt8](repeating: 0, count: LZ4Stream.DICT_SIZE)
         self.dictSize = 0
         self.processedBytes = 0
     }
     
+    deinit {
+        self.hashTable.deallocate()
+    }
+    
     public func reset() {
-        // Reset hash table?
-        // Actually, we can just zero it or reset processedBytes?
-        // If we reset processedBytes, old hash entries become invalid (or treated as very old).
-        // But collisions?
-        // Safe bet: clear hash table.
-        for i in 0..<hashTable.count { hashTable[i] = 0 }
+        // Efficiently zero out hash table
+        self.hashTable.update(repeating: 0, count: LZ4Constants.HASH_SIZE_U32)
         self.dictSize = 0
         self.processedBytes = 0
     }
