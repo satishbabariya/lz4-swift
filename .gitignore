@@ -61,6 +61,9 @@ ld.exe*
 
 # test artifacts
 *.lz4
+*.bin
+bench_*.bin
+.swift-version
 tmp*
 .stdvars.log
 cmake_download/
