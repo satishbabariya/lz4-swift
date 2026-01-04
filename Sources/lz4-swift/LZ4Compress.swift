@@ -28,7 +28,7 @@ public enum LZ4Compress {
         let maxDstSize = dst.count
         return src.withUnsafeBufferPointer { sPtr in
             return dst.withUnsafeMutableBufferPointer { dPtr in
-                return compress_generic(ctx, srcPtr: sPtr.baseAddress!, srcSize: srcSize, dstPtr: dPtr.baseAddress!, maxDstSize: maxDstSize, acceleration: 1)
+                return compress_generic(ctx, srcPtr: sPtr.baseAddress!, srcSize: srcSize, dstPtr: dPtr.baseAddress!, maxDstSize: maxDstSize, acceleration: 1, hashTable: ctx.hashTable)
             }
         }
     }
@@ -44,7 +44,7 @@ public enum LZ4Compress {
         let maxDstSize = dst.count
         let result = src.withUnsafeBufferPointer { sPtr in
             return dst.withUnsafeMutableBufferPointer { dPtr in
-                 return compress_generic(ctx, srcPtr: sPtr.baseAddress!, srcSize: srcSize, dstPtr: dPtr.baseAddress!, maxDstSize: maxDstSize, acceleration: acceleration)
+                 return compress_generic(ctx, srcPtr: sPtr.baseAddress!, srcSize: srcSize, dstPtr: dPtr.baseAddress!, maxDstSize: maxDstSize, acceleration: acceleration, hashTable: ctx.hashTable)
             }
         }
         
@@ -85,7 +85,7 @@ public enum LZ4Compress {
 
     // MARK: - Internal Generic Compression
     
-    private static func compress_generic(_ ctx: LZ4Stream, srcPtr: UnsafePointer<UInt8>, srcSize: Int, dstPtr: UnsafeMutablePointer<UInt8>, maxDstSize: Int, acceleration: Int) -> Int {
+    private static func compress_generic(_ ctx: LZ4Stream, srcPtr: UnsafePointer<UInt8>, srcSize: Int, dstPtr: UnsafeMutablePointer<UInt8>, maxDstSize: Int, acceleration: Int, hashTable: UnsafeMutablePointer<Int32>) -> Int {
         
         // Handle small inputs
         if srcSize < LZ4Constants.MINMATCH + 1 {
@@ -126,7 +126,7 @@ public enum LZ4Compress {
         let dictSize = ctx.dictSize
         
         // Use separate pointers for dict and hash table for speed (hoist)
-        let hashTable = ctx.hashTable
+        // hashTable passed in args
         let lowLimit = baseIp - dictSize
         
         // Setup Hash Table Init
@@ -256,30 +256,26 @@ public enum LZ4Compress {
                 
                 // Forward match extend
                 
-                // SIMD Optimization (Prefix only)
-                while ip < matchlimit - 16 {
-                    if matchIndex >= baseIp {
-                        let p1 = UnsafeRawPointer(srcPtr).advanced(by: ip)
-                        let p2 = UnsafeRawPointer(srcPtr).advanced(by: matchIndex - baseIp)
-                        
-                        var v1 = SIMD16<UInt8>.zero
-                        var v2 = SIMD16<UInt8>.zero
-                        
-                        withUnsafeMutableBytes(of: &v1) { vPtr in
-                            vPtr.copyMemory(from: UnsafeRawBufferPointer(start: p1, count: 16))
-                        }
-                        withUnsafeMutableBytes(of: &v2) { vPtr in
-                            vPtr.copyMemory(from: UnsafeRawBufferPointer(start: p2, count: 16))
-                        }
-                        
-                        if v1 == v2 {
-                            ip += 16
-                            matchIndex += 16
-                            continue
-                        }
-                    }
-                    break // Fallback to byte check
+                // Forward match extend
+                
+                // 64-bit Match Check Optimization (Prefix only)
+                if matchIndex >= baseIp {
+                     while ip < matchlimit - 8 {
+                         let diff = read64(srcPtr, ip) ^ read64(srcPtr, matchIndex - baseIp)
+                         if diff == 0 {
+                             ip += 8
+                             matchIndex += 8
+                             continue
+                         }
+                         let zeroes = diff.trailingZeroBitCount >> 3
+                         ip += zeroes
+                         matchIndex += zeroes
+                         break
+                     }
                 }
+                
+                // Byte-by-byte Fallback using standard loop below
+
                 
                 while ip < matchlimit {
                     let sByte = srcPtr[ip]
@@ -381,6 +377,15 @@ public enum LZ4Compress {
         var val: UInt32 = 0
         withUnsafeMutableBytes(of: &val) { ptr in
             ptr.copyMemory(from: UnsafeRawBufferPointer(start: src + index, count: 4))
+        }
+        return val
+    }
+
+    @inline(__always)
+    private static func read64(_ src: UnsafePointer<UInt8>, _ index: Int) -> UInt64 {
+        var val: UInt64 = 0
+        withUnsafeMutableBytes(of: &val) { ptr in
+            ptr.copyMemory(from: UnsafeRawBufferPointer(start: src + index, count: 8))
         }
         return val
     }
