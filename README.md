@@ -8,7 +8,7 @@ A high-performance, pure Swift implementation of the LZ4 compression algorithm.
 
 - **Pure Swift**: No C dependencies, easy to drop into any Swift project.
 - **High Performance**:
-  - **Decompression**: **~4.6 GB/s** (Faster than Rust `lz4_flex`!).
+  - **Decompression**: **~4.6 GB/s**.
   - **Compression**: **~3.6 - 4.8 GB/s** (Excellent for network/disk I/O).
 - **LZ4 Frame Support**: Full support for the LZ4 Frame format (interoperable with standard `lz4` CLI).
 - **Modern API**: Typesafe `LZ4Stream` and simple `compress`/`decompress` helpers.
@@ -20,7 +20,7 @@ Benchmarks run on Apple Silicon (M-series).
 
 | Operation | Dataset | Speed | Notes |
 | :--- | :--- | :--- | :--- |
-| **Decompression** | Random Data | **4.56 GB/s** | **30% Faster than Rust** |
+| **Decompression** | Random Data | **4.56 GB/s** | |
 | **Compression** | Zeroes | **4.76 GB/s** | Highly optimized match extension |
 | **Compression** | Random Data | **3.60 GB/s** | |
 
